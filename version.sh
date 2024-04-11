@@ -3,11 +3,9 @@
 BUMP=${BUMP:-patch} #minor major
 PACKAGE_JSON=${PACKAGE_JSON:-package.json}
 # MASTER_BRANCH=$(git branch --show-current)
-MASTER_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
+# MASTER_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
 # BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 operation=$1
-BRANCH_NAME=${2:-$BRANCH_NAME}
-PACKAGE_MANAGER=$(echo "$@" | cut -d ' ' -f 3-)
 # BUILD_NUMBER=0
 
 USAGE="\
@@ -20,6 +18,9 @@ Commands:
               Add git-tag and push if 'git' option.
               Read and update package.json version if 'npm' option.
               E.g. 'bump \$CURRENT_BRANCH git npm'
+              If APP_VERSION = GIT_TAG_VERSION - Increment git-tag and app-version (push version-file and git-tag)
+              If APP_VERSION > GIT_TAG_VERSION - Set git-tag in app-version (git-tag)
+              If APP_VERSION < GIT_TAG_VERSION - Set app-version in git tag (push version-file)
 
   latest      Return latest git-tag. Specify 'commit_sha' to get tag of the commit if exists
 
@@ -46,50 +47,74 @@ function set_package_version() {
 }
 
 function bump_version() {
-  # echo "bump_version"
-  # echo "$@"
-  GIT_MANAGER=$(echo "$@" | grep -o "git" || echo "")
-  PACKAGE_MANAGER=$(echo "$@" | sed 's/[[:space:]]*git[[:space:]]*//g')
-  # GIT_VERSION=$(git tag -l --sort=-creatordate | head -n 1)
-  echo "TAGS $(git describe --tags --abbrev=0)"
+  BUMP="$1"
+  BRANCH_NAME=$(get_master_branch_name)
+  shift
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -b|--branch) BRANCH_NAME="$2"; shift;;
+      -r|--repo) GIT_MANAGER="$2"; shift;;
+      -p|--package) PACKAGE_MANAGER="$2"; shift;;
+      -s|--skip) SKIP="-o ci.skip ";;
+      -st|--skip-tag) SKIP_TAG="-o ci.skip ";;
+    esac
+    shift
+  done
+
   GIT_REPO_SSH_URL=$(git remote get-url origin)
   GIT_VERSION=$(latest $GIT_REPO_SSH_URL) # Get latest git-tag of the branch
   VERSION="${GIT_VERSION:-0.0.0}"
   APP_VERSION="$VERSION"
-  if [ -n "$PACKAGE_MANAGER" ]; then
+  if [[ -n "$PACKAGE_MANAGER" ]]; then
     APP_VERSION=$(get_package_version $PACKAGE_MANAGER)
   fi
-  # echo "VERSION $VERSION, GIT_VERSION $GIT_VERSION, APP_VERSION $APP_VERSION, GIT_MANAGER $GIT_MANAGER, PACKAGE_MANAGER $PACKAGE_MANAGER"
+  # echo "VERSION $VERSION, GIT_VERSION $GIT_VERSION, APP_VERSION $APP_VERSION, GIT_MANAGER $GIT_MANAGER, PACKAGE_MANAGER $PACKAGE_MANAGER, SKIP $SKIP"
 
-  if [ "$VERSION" = "$APP_VERSION" ] # Auto increment
+  if [[ "$VERSION" = "$APP_VERSION" ]] # Auto increment
   then 
-      BUMPED_VERSION=$(semver.sh bump $BUMP $VERSION)
-      # echo "Increment version $VERSION -> $BUMPED_VERSION"
-      VERSION="$BUMPED_VERSION"
-      
-      if [ -n "$PACKAGE_MANAGER" ]; then
-        AFFECTED_FILES=$(set_package_version "$VERSION" "$PACKAGE_MANAGER")
-        git add "$AFFECTED_FILES"
-        git commit --allow-empty -q -m "Release version $VERSION"
-      fi
-  elif [ -n "$APP_VERSION" ] # Manual increment
+    BUMPED_VERSION=$(semver.sh bump $BUMP $VERSION)
+    # echo "Increment version $VERSION -> $BUMPED_VERSION"
+    VERSION="$BUMPED_VERSION"
+    
+    if [[ -n "$PACKAGE_MANAGER" ]]; then
+      AFFECTED_FILES=$(set_package_version "$VERSION" "$PACKAGE_MANAGER")
+      git add "$AFFECTED_FILES"
+      git commit --allow-empty -q -m "Release version $VERSION"
+    fi
+  elif [[ $(semver.sh compare "$APP_VERSION" "$VERSION") = "1" ]] # APP_VERSION > GIT_VERSION
   then
-      # echo "Update version from package.json $VERSION -> $APP_VERSION"
-      VERSION="$APP_VERSION"
-  # else
-  #     echo "Use version from GIT-tag $VERSION"
+    # echo "Use version from package.json $APP_VERSION"
+    VERSION="$APP_VERSION"
+  else
+    # echo "Use version from GIT-tag $VERSION"
+    if [[ -n "$PACKAGE_MANAGER" ]]; then
+      AFFECTED_FILES=$(set_package_version "$VERSION" "$PACKAGE_MANAGER")
+      git add "$AFFECTED_FILES"
+      git commit --allow-empty -q -m "Release version $VERSION"
+    fi
   fi
 
-  if [ -n "$GIT_MANAGER" ]; then
-    git tag -f "$VERSION"
-    git push -q --follow-tags --no-verify origin $(get_master_branch_name) "$VERSION"
+  if [[ -n "$GIT_MANAGER" ]]; then
+    if [[ -z $(git ls-remote --tags origin "$VERSION") ]]; then # if tag doesn't exist
+      git tag -f "$VERSION"
+
+      if [[ $SKIP_TAG = $SKIP ]]; then # Use one push if possible
+        bash -c "git push -q --follow-tags $SKIP--no-verify origin $BRANCH_NAME $VERSION" #2>/dev/null || true
+      else
+        bash -c "git push -q $SKIP_TAG--no-verify origin $VERSION"
+        bash -c "git push -q $SKIP--no-verify origin $BRANCH_NAME"
+      fi
+    else
+      bash -c "git push -q $SKIP--no-verify origin $BRANCH_NAME"
+    fi
   fi
 
   echo $VERSION
 }
 
 function latest() {
-  if [ -n "$1" ]; then
+  if [[ -n "$1" ]]; then
     git -c 'versionsort.suffix=-' ls-remote --tags --sort='v:refname' $1 | tail -n1 | awk '{print $2}' | sed 's@refs/tags/@@' || echo "0.0.0"
   else
     git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0"
@@ -117,7 +142,8 @@ function get_master_branch_name() {
     # git ls-remote --symref $1 HEAD | awk '{print $2}' | head -n 1 | sed 's@refs/heads/@@' # 2>/dev/null
     # git ls-remote --symref "$REPO_URL" | awk '/HEAD/ {print $2}' | head -n 1 | sed 's@refs/heads/@@'
   else
-    git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@'
+    # git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@'
+    git remote show origin | sed -n '/HEAD branch/s/.*: //p'
   fi
 }
 
@@ -132,24 +158,22 @@ function docker_tag() {
 # echo "+++ $operation"
 
 if [ "$operation" = "bump" ]; then
-  if [ "$BRANCH_NAME" = "$MASTER_BRANCH" ]
-  then
-    bump_version "$PACKAGE_MANAGER"
-  fi
+  bump_version "${@:2}"
+  
 elif [ "$operation" = "docker_tag" ]; then
-  docker_tag "$BRANCH_NAME"
+  docker_tag "$2"
 
 elif [ "$operation" = "latest" ]; then
-  latest "$BRANCH_NAME"
+  latest "$2"
 
 elif [ "$operation" = "get_commit_tag" ]; then
-  get_commit_tag "$BRANCH_NAME"
+  get_commit_tag "$2"
 
 elif [ "$operation" = "get_master_branch_name" ]; then
-  get_master_branch_name "$BRANCH_NAME"
+  get_master_branch_name "$2"
 
 elif [ "$operation" = "get_remote_branch_by_commit" ]; then
-  get_remote_branch_by_commit "$BRANCH_NAME" "$PACKAGE_MANAGER"
+  get_remote_branch_by_commit "$2" "$(echo "$@" | cut -d ' ' -f 3-)"
 
 elif [ "$operation" = "-v" ] || [ "$operation" = "--version" ]; then
   echo "0.0.1"
