@@ -176,7 +176,7 @@ elif [ "$operation" = "get_remote_branch_by_commit" ]; then
   get_remote_branch_by_commit "$2" "$(echo "$@" | cut -d ' ' -f 3-)"
 
 elif [ "$operation" = "-v" ] || [ "$operation" = "--version" ]; then
-  echo "0.0.1"
+  echo "0.0.2"
 
 elif [ "$operation" = "-h" ] || [ "$operation" = "--help" ]; then
   echo "$USAGE"
