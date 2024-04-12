@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+
+PACKAGE_JSON=${PACKAGE_JSON:-package.json}
+operation=$1
+
+PROG=versioner
+PROG_VERSION="0.0.1"
+
+USAGE="\
+Usage:
+  $PROG bump major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-p|--push] [-s|--skip] [-st|--skip-tag]
+  $PROG release major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-n|--number <build-number>] [-p|--push] [-s|--skip] [-st|--skip-tag] [-ss|--skip-snapshot]
+  $PROG get_app_version <application-type>
+  $PROG set_app_version <application-type> <version>
+  $PROG get_commit_tag_by_branch <branch>
+  $PROG get_commit_tag_by_commit <commit>
+  $PROG get_default_branch [<repository-url>]
+  $PROG get_remote_branch_by_commit <repository-url> <commit>
+  $PROG latest [<repository-url>]
+  $PROG docker_tag <string>
+  $PROG --help
+  $PROG --version
+
+Arguments:
+  <branch>           Branch name
+  <branch>           Commit SHA
+  <application-type> Type of application config. Only supported npm (package.json)
+  <build-number>     Version suffix
+  <version>          Semver version
+  <repository-url>   Repository URL
+
+Options:
+  -v, --version      Print the version of this tool.
+  -h, --help         Print this help message.
+
+Commands:
+  bump        Bump by one of major, minor, patch version of branch. Default branch (main or master) if --branch not specify. 
+              Add git-tag and push if --push option.
+              Read and update application version if --type option. package.json for npm type
+              Mark any push as skip-ci if --skip option or push tag only if --skip-tag option
+              E.g. 'bump master -t npm --push'
+              If APP_VERSION = GIT_TAG_VERSION - Increment git-tag and app-version (push version-file and git-tag)
+              If APP_VERSION > GIT_TAG_VERSION - Set git-tag in app-version (git-tag)
+              If APP_VERSION < GIT_TAG_VERSION - Set app-version in git tag (push version-file)
+              Return new version
+
+  release     Update version tag
+              E.g. 'release patch -b feature -n 123 -t npm -p -st -ss'
+              If BRANCH = DEFAULT_BRANCH - Bump version. See bump arguments
+              If BRANCH != DEFAULT_BRANCH and not --skip-snapshot - Make shapshot tag <current-version>-<branch-name>.<build-number>
+              Return docker compatibility version tag
+
+  get_app_version             Get version tag from application config (e.g. for package.json if --type npm)
+
+  set_app_version             Set version tag to application config (e.g. for package.json if --type npm)
+
+  get_commit_tag_by_branch    Get nearest tag of local repository by branch name
+
+  get_commit_tag_by_commit    Get tag of local repository by commit SHA
+
+  get_default_branch          Get default branch name of local or remote repository
+
+  get_remote_branch_by_commit Get branch name of remote repository by commit   
+
+  latest                      Return latest git-tag. Specify 'commit_sha' to get tag of the commit if exists
+
+  docker_tag                  Normalize string to docker-tag.
+  "
+
+function get_app_version() {
+  PACKAGE_MANAGER=$1
+
+  if [[ "$PACKAGE_MANAGER" == "npm" ]]; then
+    echo $(jq -r '.version' ${2:-./package.json})
+  fi
+}
+
+function set_app_version() {
+  VERSION=$1
+  PACKAGE_MANAGER=$2
+  
+  if [ "$PACKAGE_MANAGER" = "npm" ]; then
+    TMP=$(mktemp)
+    jq --arg version "$VERSION" '.version=$version' "${3:-./package.json}" > "$TMP" && mv "$TMP" "${3:-./package.json}"
+  fi
+  echo ${3:-package.json}
+}
+
+function release() {
+  ARGS="$@"
+  BUMP="$1"
+  MASTER_NAME=$(get_default_branch)
+  BRANCH_NAME=$MASTER_NAME
+  COMMIT_SHA=$(git rev-parse --short HEAD)
+  BUILD_NUMBER=$(echo "$COMMIT_SHA" | cut -c 1-3)
+  shift
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -b|--branch) BRANCH_NAME="$2"; shift;;
+      -n|--number) BUILD_NUMBER="$2"; shift;;
+      -ss|--skip-snapshot) SKIP_SNAPSHOT="true";;
+    esac
+    shift
+  done
+
+  VERSION=$(latest)
+  if [[ "$BRANCH_NAME" == "$MASTER_NAME" ]]; then
+    if [[ -z $(get_commit_tag_by_commit $COMMIT_SHA) ]]; then # Commit does not have a tag
+      bump_version $ARGS # Bumped version
+    else
+      echo "$VERSION" # Current version
+    fi
+  elif [[ -z "$SKIP_SNAPSHOT" ]]; then
+    echo "$VERSION-$BRANCH_NAME.$BUILD_NUMBER" # Snapshot version
+  fi
+}
+
+function bump_version() {
+  BUMP="$1"
+  BRANCH_NAME=$(get_default_branch)
+  shift
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -b|--branch) BRANCH_NAME="$2"; shift;;
+      -t|--type) PACKAGE_MANAGER="$2"; shift;;
+      -p|--push) GIT_MANAGER="git";;
+      -s|--skip) SKIP="-o ci.skip ";;
+      -st|--skip-tag) SKIP_TAG="-o ci.skip ";;
+    esac
+    shift
+  done
+
+  GIT_REPO_SSH_URL=$(git remote get-url origin)
+  GIT_VERSION=$(latest $GIT_REPO_SSH_URL) # Get latest git-tag of the branch
+  VERSION="${GIT_VERSION:-0.0.0}"
+  APP_VERSION="$VERSION"
+  if [[ -n "$PACKAGE_MANAGER" ]]; then
+    APP_VERSION=$(get_app_version $PACKAGE_MANAGER)
+  fi
+  # echo "BUMP $BUMP, VERSION $VERSION, GIT_VERSION $GIT_VERSION, APP_VERSION $APP_VERSION, GIT_MANAGER $GIT_MANAGER, PACKAGE_MANAGER $PACKAGE_MANAGER, SKIP $SKIP"
+
+  if [[ "$VERSION" = "$APP_VERSION" ]] # Auto increment
+  then 
+    BUMPED_VERSION=$(semver.sh bump $BUMP $VERSION)
+    # echo "Increment version $VERSION -> $BUMPED_VERSION"
+    VERSION="$BUMPED_VERSION"
+    
+    if [[ -n "$PACKAGE_MANAGER" ]]; then
+      AFFECTED_FILES=$(set_app_version "$VERSION" "$PACKAGE_MANAGER")
+      git add "$AFFECTED_FILES"
+      git commit --allow-empty -q -m "Release version $VERSION"
+    fi
+  elif [[ $(semver.sh compare "$APP_VERSION" "$VERSION") = "1" ]] # APP_VERSION > GIT_VERSION
+  then
+    # echo "Use version from package.json $APP_VERSION"
+    VERSION="$APP_VERSION"
+  else
+    # echo "Use version from GIT-tag $VERSION"
+    if [[ -n "$PACKAGE_MANAGER" ]]; then
+      AFFECTED_FILES=$(set_app_version "$VERSION" "$PACKAGE_MANAGER")
+      git add "$AFFECTED_FILES"
+      git commit --allow-empty -q -m "Release version $VERSION"
+    fi
+  fi
+
+  if [[ -n "$GIT_MANAGER" ]]; then
+    if [[ -z $(git ls-remote --tags origin "$VERSION") ]]; then # if tag doesn't exist
+      git tag -f "$VERSION"
+
+      if [[ $SKIP_TAG = $SKIP ]]; then # Use one push if possible
+        bash -c "git push -q --follow-tags $SKIP--no-verify origin $BRANCH_NAME $VERSION" #2>/dev/null || true
+      else
+        bash -c "git push -q $SKIP_TAG--no-verify origin $VERSION"
+        bash -c "git push -q $SKIP--no-verify origin $BRANCH_NAME"
+      fi
+    else
+      bash -c "git push -q $SKIP--no-verify origin $BRANCH_NAME"
+    fi
+  fi
+
+  echo "$VERSION"
+}
+
+function latest() {
+  if [[ -n "$1" ]]; then
+    git -c 'versionsort.suffix=-' ls-remote --tags --sort='v:refname' $1 | tail -n1 | awk '{print $2}' | sed 's@refs/tags/@@' || echo "0.0.0"
+  else
+    git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0"
+  fi
+}
+
+function get_commit_tag_by_commit() {
+  git tag --points-at $1
+}
+
+function get_commit_tag_by_branch() {
+  git describe --tags --abbrev=0 $1 2>/dev/null || echo ""
+}
+
+function get_remote_branch_by_commit() {
+  git ls-remote --heads $1 | while read sha refs; do # Repo url
+    if [[ $sha == $2 ]]; then # Commit id
+        echo "$(echo $refs | sed 's@refs/heads/@@')"
+    fi
+  done
+}
+
+function get_default_branch() {
+  if [ -n "$1" ]; then
+    # git ls-remote --symref "$1" HEAD
+    # git ls-remote --symref $1 HEAD | awk '/HEAD/ {split($2, a, "/"); print a[3]}'
+    git ls-remote --symref $1 HEAD | awk '{print $2}' | head -n 1 | sed 's@refs/heads/@@'
+    # git ls-remote --symref $1 HEAD | awk '{print $2}' | head -n 1 | sed 's@refs/heads/@@' # 2>/dev/null
+    # git ls-remote --symref "$REPO_URL" | awk '/HEAD/ {print $2}' | head -n 1 | sed 's@refs/heads/@@'
+  else
+    # git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@'
+    git remote show origin | sed -n '/HEAD branch/s/.*: //p'
+  fi
+}
+
+function docker_tag() {
+  echo "$1" | tr -s '[:blank:]' '_' | tr -cd '[:alnum:]._-' | tr '[:upper:]' '[:lower:]'; echo
+}
+
+
+# if [ -z "$(git tag --contains $PROJECT_COMMIT_SHA)" ]; then
+#   echo "Commit does not have a tag"
+# fi
+# echo "+++ $operation"
+
+if [ "$operation" = "bump" ]; then
+  bump_version "${@:2}"
+
+elif [ "$operation" = "release" ]; then
+  release "${@:2}"
+
+elif [ "$operation" = "get_app_version" ]; then
+  get_app_version "$2"
+
+elif [ "$operation" = "set_app_version" ]; then
+  set_app_version "${@:2}"
+  
+elif [ "$operation" = "docker_tag" ]; then
+  docker_tag "$2"
+
+elif [ "$operation" = "latest" ]; then
+  latest "$2"
+
+elif [ "$operation" = "get_commit_tag_by_branch" ]; then
+  get_commit_tag_by_branch "$2"
+
+elif [ "$operation" = "get_commit_tag_by_commit" ]; then
+  get_commit_tag_by_commit "$2"
+
+elif [ "$operation" = "get_default_branch" ]; then
+  get_default_branch "$2"
+
+elif [ "$operation" = "get_remote_branch_by_commit" ]; then
+  get_remote_branch_by_commit "$2" "$(echo "$@" | cut -d ' ' -f 3-)"
+
+elif [ "$operation" = "-v" ] || [ "$operation" = "--version" ]; then
+  echo "$PROG_VERSION"
+
+elif [ "$operation" = "-h" ] || [ "$operation" = "--help" ]; then
+  echo "$USAGE"
+
+else
+  echo "Non-existent operation. See $PROG --help"
+fi
+
