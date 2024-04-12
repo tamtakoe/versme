@@ -1,4 +1,4 @@
-# versme
+# Versme
 Docker image source of version bumping for CI-CD
 
 Manage GIT and NPM (package.json) tags
