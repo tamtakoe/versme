@@ -1,0 +1,133 @@
+stages:
+  - setup
+  - build
+  - release
+
+setup:
+  stage: setup
+  image: tamtakoe/versme:latest
+  variables:
+    REPO_SSH_URL: git@github.com:my-project/my-repo.git
+  script:
+    # Pipeline triggered by webhook of remote repo
+    - BASE_REF=$(cat $TRIGGER_PAYLOAD | jq -r '.base_ref')
+    - |-
+      if [[ -z "$TRIGGER_PAYLOAD" ]]; then
+        echo "No triggered by external repo. Cancel this pipeline"
+        curl --request POST --header "PRIVATE-TOKEN: $PIPELINE_API_TOKEN" "$CI_API_V4_URL/projects/$CI_PROJECT_ID/pipelines/$CI_PIPELINE_ID/cancel"
+        sleep 3
+        exit 1
+      fi
+
+      if [[ "$BASE_REF" != "null" ]]; then
+        echo "No docker tag. Delete this pipeline"
+        curl --request DELETE --header "PRIVATE-TOKEN: $PIPELINE_API_TOKEN" "$CI_API_V4_URL/projects/$CI_PROJECT_ID/pipelines/$CI_PIPELINE_ID"
+        sleep 3
+        exit 1
+      fi
+
+    # Setup SSH-access to project repo
+    - mkdir -p ~/.ssh
+    - ssh-keyscan github.com >> ~/.ssh/known_hosts
+    - cat $SSH_PRIVATE_KEY_FILE | tr -d '\r' > ~/.ssh/id_rsa
+    - chmod 644 ~/.ssh/known_hosts
+    - chmod 400 ~/.ssh/id_rsa
+    
+    # Extract repo info
+    - PROJECT_COMMIT_SHA=$(cat $TRIGGER_PAYLOAD | jq -r '.head_commit.id')
+    - PROJECT_REPO_NAME=$(cat $TRIGGER_PAYLOAD | jq -r '.repository.name') 
+    - PROJECT_REPO_SSH_URL=$(cat $TRIGGER_PAYLOAD | jq -r '.repository.ssh_url')
+    - MASTER_BRANCH=$(versme get_default_branch $PROJECT_REPO_SSH_URL) # Get default branch of remote repo
+    - PROJECT_BRANCH=$(versme get_remote_branch_by_commit $PROJECT_REPO_SSH_URL $PROJECT_COMMIT_SHA) # Get commit branch of remote repo
+
+    # Clone project repo (shallow copy)
+    - git clone --depth=1 -b "$PROJECT_BRANCH" "${PROJECT_REPO_SSH_URL:-$REPO_SSH_URL}" ./$PROJECT_REPO_NAME
+    - git config --global user.email "${GITLAB_USER_EMAIL}"
+    - git config --global user.name "${GITLAB_USER_NAME}"
+
+    # Update version
+    - cd "./$PROJECT_REPO_NAME"
+    - VERSION=$(versme latest $PROJECT_REPO_SSH_URL) # Get last version of remote repo
+    - |-
+      if [[ "$PROJECT_BRANCH" = "$MASTER_BRANCH" ]]; then
+        if [[ -z $(versme get_commit_tag_by_commit $PROJECT_COMMIT_SHA) ]]; then # Check if commit has tag
+          echo "Commit does not have a tag"
+          NEW_VERSION=$(versme bump patch -p -t npm) # Bump version, save it to package.json and push to remote repo
+          echo "New version $NEW_VERSION"
+        else
+          echo "Docker tag with current version"
+          DOCKER_TAG="$VERSION"
+        fi
+      else
+        echo "Docker tag with snapshot branch"
+        DOCKER_TAG="$VERSION-$PROJECT_BRANCH.$CI_PIPELINE_IID"
+      fi
+    - cd ..
+      
+    # Export repo info
+    - echo "PROJECT_REPO_SSH_URL=${PROJECT_REPO_SSH_URL:-$REPO_SSH_URL}" >> setup.env
+    - echo "PROJECT_REPO_NAME=$PROJECT_REPO_NAME" >> setup.env
+    - echo "DOCKER_TAG=$DOCKER_TAG" >> setup.env
+    - |-
+      if [[ -z "$DOCKER_TAG" ]]; then
+        echo "No docker tag. Delete this pipeline"
+        curl --request DELETE --header "PRIVATE-TOKEN: $PIPELINE_API_TOKEN" "$CI_API_V4_URL/projects/$CI_PROJECT_ID/pipelines/$CI_PIPELINE_ID"
+        sleep 3
+        exit 1
+      else
+        echo "Make empty job with tag $DOCKER_TAG"
+        git remote remove origin
+        git remote add origin https://oauth2:$GITLAB_REPOSITORY_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git
+        git tag $DOCKER_TAG # Just to show label in the GitLab UI
+        git push -o ci.skip origin --tags
+      fi
+  artifacts:
+    reports:
+      dotenv: setup.env
+    paths:
+      - ./$PROJECT_REPO_NAME
+    exclude:
+      - .git/**/*
+
+build:
+  image: docker:26.0.0
+  stage: build
+  services:
+    - docker:26.0.0-dind
+  script:
+    - echo "Deploy version $DOCKER_TAG"
+    - if [[ -z "$DOCKER_TAG" ]]; then echo "No docker tag" && exit 1; fi
+
+    # Setup SSH-access to project repo
+    - apk add openssh-client
+    - mkdir -p ~/.ssh
+    - ssh-keyscan github.com >> ~/.ssh/known_hosts
+    - ssh-keyscan $SERVER_HOST >> ~/.ssh/known_hosts
+    - cat $SSH_PRIVATE_KEY_FILE | tr -d '\r' > ~/.ssh/id_rsa
+    - chmod 644 ~/.ssh/known_hosts
+    - chmod 400 ~/.ssh/id_rsa
+
+    # Setup docker context to connect to docker on remote server
+    - docker context create remote --docker "host=ssh://ci-user@$SERVER_HOST" # Creating the new ssh context
+
+    # Login, build and push image
+    - echo $CI_DEPLOY_PASSWORD | docker login $CI_REGISTRY -u $CI_DEPLOY_USER --password-stdin
+    - docker build -t $CI_REGISTRY_IMAGE:$DOCKER_TAG -t $CI_REGISTRY_IMAGE:latest ./$PROJECT_REPO_NAME
+    - docker push --all-tags $CI_REGISTRY_IMAGE
+
+    # Deploy to remote server
+    - docker --context remote stack deploy --with-registry-auth -c docker-compose.yaml prod
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - echo "Running the release job."
+  release:
+    tag_name: $DOCKER_TAG
+    name: 'Release $DOCKER_TAG'
+    description: 'Release created using the release-cli.'
+    assets:
+      links:
+        - name: 'Container Image $CI_COMMIT_TAG'
+          url: "https://$CI_REGISTRY_IMAGE:$DOCKER_TAG"

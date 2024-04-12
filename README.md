@@ -10,6 +10,9 @@ Based on Alpine image with `bash`, `git`, `openssh-client`, `jq` and `curl`. Use
 tamtakoe/versme:latest
 ```
 
+### Examples
+See examples dir
+
 ### Usage
 ```sh
 versme bump major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-p|--push] [-s|--skip] [-st|--skip-tag]

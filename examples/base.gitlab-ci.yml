@@ -1,0 +1,92 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+      when: never
+    - if: $CI_COMMIT_MESSAGE !~ /^Release version .+/
+
+stages:
+  - setup
+  - build
+  - release
+
+setup:
+  stage: setup
+  image: tamtakoe/versme:latest
+  script:
+    # Checkout and pull current branch due to detached latest Gitlab commit
+    - git checkout $CI_COMMIT_BRANCH
+    - git config --global user.email "${GITLAB_USER_EMAIL}"
+    - git config --global user.name "${GITLAB_USER_NAME}"
+    - git config pull.rebase false
+    - git reset --hard origin/$CI_COMMIT_BRANCH
+    - git pull origin $CI_COMMIT_BRANCH --allow-unrelated-histories
+    
+    # Setup remote origin
+    - git remote remove origin
+    - git remote add origin https://oauth2:$GITLAB_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git
+
+    # Update version 
+    # - bump patch version if default branch and skip to create snapshot tag otherwise
+    # - update package.json with new version
+    # - push package.json changes and the new tag to the repo
+    # - use skip-ci when push tag
+    - DOCKER_TAG=$(versme release patch -b $CI_COMMIT_BRANCH -n $CI_PIPELINE_IID -t npm -p -st --skip-snapshot)
+    - echo "DOCKER_TAG=$DOCKER_TAG" >> setup.env
+  artifacts:
+    reports:
+      dotenv: setup.env
+    paths:
+      - ./
+    exclude:
+      - .git/**/*
+
+build:
+  stage: build
+  image: docker:26.0.0
+  services:
+    - docker:26.0.0-dind
+  script:
+    - echo "Deploy version $DOCKER_TAG"
+    - if [[ -z "$DOCKER_TAG" ]]; then echo "No docker tag. Skip build and deploy" && exit 0; fi
+
+    # Setup SSH-access to project repo
+    - apk add openssh-client
+    - mkdir -p ~/.ssh
+    - ssh-keyscan github.com >> ~/.ssh/known_hosts
+    - ssh-keyscan $SERVER_HOST >> ~/.ssh/known_hosts
+    - cat $SSH_PRIVATE_KEY_FILE | tr -d '\r' > ~/.ssh/id_rsa
+    - chmod 644 ~/.ssh/known_hosts
+    - chmod 400 ~/.ssh/id_rsa
+
+    # Setup docker context to connect to docker on remote server
+    - docker context create remote --docker "host=ssh://ci-user@$SERVER_HOST" # Creating the new ssh context
+
+    # Login, build and push image
+    # (Deploy token named gitlab-deploy-token is automatically exposed as CI_DEPLOY_USER and CI_DEPLOY_PASSWORD)
+    - echo $CI_DEPLOY_PASSWORD | docker login $CI_REGISTRY -u $CI_DEPLOY_USER --password-stdin
+    - docker build -t $CI_REGISTRY_IMAGE:$DOCKER_TAG -t $CI_REGISTRY_IMAGE:latest .
+    - docker push --all-tags $CI_REGISTRY_IMAGE
+
+    # Deploy to remote server
+    - docker --context remote stack deploy --with-registry-auth -c docker-compose.yaml prod
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: $CI_DEFAULT_BRANCH == $CI_COMMIT_BRANCH
+  tags:
+    - docker-build
+  script:
+    - env
+    - echo "Running the release job."
+  release:
+    tag_name: $DOCKER_TAG
+    name: 'Release $DOCKER_TAG'
+    description: 'Release created using the release-cli.'
+    assets:
+      links:
+        - name: 'Container Image $CI_COMMIT_TAG'
+          url: "https://$CI_REGISTRY_IMAGE:$DOCKER_TAG"
+
+
