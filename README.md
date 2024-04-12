@@ -11,7 +11,7 @@ tamtakoe/versme:latest
 ```
 
 ### Examples
-See examples dir
+GitLab configs https://github.com/tamtakoe/versme/tree/main/examples
 
 ### Usage
 ```sh
