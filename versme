@@ -3,7 +3,7 @@
 PACKAGE_JSON=${PACKAGE_JSON:-package.json}
 operation=$1
 
-PROG=versioner
+PROG=versme
 PROG_VERSION="0.0.1"
 
 USAGE="\

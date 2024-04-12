@@ -1,4 +1,4 @@
-# Versioner
+# versme
 Docker image source of version bumping for CI-CD
 
 Manage GIT and NPM (package.json) tags
@@ -7,23 +7,23 @@ Based on Alpine image with `bash`, `git`, `openssh-client`, `jq` and `curl`. Use
 
 ### Docker image
 ```sh
-tamtakoe/versioner:0.0.1
+tamtakoe/versme:0.0.1
 ```
 
 ### Usage
 ```sh
-versioner bump major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-p|--push] [-s|--skip] [-st|--skip-tag]
-versioner release major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-n|--number <build-number>] [-p|--push] [-s|--skip] [-st|--skip-tag] [-ss|--skip-snapshot]
-versioner get_app_version <application-type>
-versioner set_app_version <application-type> <version>
-versioner get_commit_tag_by_branch <branch>
-versioner get_commit_tag_by_commit <commit>
-versioner get_default_branch [<repository-url>]
-versioner get_remote_branch_by_commit <repository-url> <commit>
-versioner latest [<repository-url>]
-versioner docker_tag <string>
-versioner --help
-versioner --version
+versme bump major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-p|--push] [-s|--skip] [-st|--skip-tag]
+versme release major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-n|--number <build-number>] [-p|--push] [-s|--skip] [-st|--skip-tag] [-ss|--skip-snapshot]
+versme get_app_version <application-type>
+versme set_app_version <application-type> <version>
+versme get_commit_tag_by_branch <branch>
+versme get_commit_tag_by_commit <commit>
+versme get_default_branch [<repository-url>]
+versme get_remote_branch_by_commit <repository-url> <commit>
+versme latest [<repository-url>]
+versme docker_tag <string>
+versme --help
+versme --version
 
 Arguments:
   <branch>           Branch name
@@ -73,7 +73,7 @@ Commands:
 
 ### Publish
 ```
-docker build -t tamtakoe/version-management:latest .
+docker build -t tamtakoe/versme:latest .
 docker login
-docker push tamtakoe/version-management:latest
+docker push tamtakoe/versme:latest
 ```
