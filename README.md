@@ -7,7 +7,7 @@ Based on Alpine image with `bash`, `git`, `openssh-client`, `jq` and `curl`. Use
 
 ### Docker image
 ```sh
-tamtakoe/versme:0.0.1
+tamtakoe/versme:latest
 ```
 
 ### Usage
