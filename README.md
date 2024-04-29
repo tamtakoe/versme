@@ -16,7 +16,7 @@ tamtakoe/versme:latest
 CI_COMMIT_BRANCH=master
 CI_PIPELINE_IID=456
 
-# 1. Increment patch version of git-tag and package.json
+# 1. Increment patch version of GIT-tag and package.json
 # 2. Push git-tag (with ci.skip option) and package.json to the repo
 # 3. Returns 1.2.4
 DOCKER_TAG=$(versme release patch -b $CI_COMMIT_BRANCH -n $CI_PIPELINE_IID --type npm --push --skip-tag)
