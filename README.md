@@ -1,7 +1,7 @@
 # Versme
-Docker image source of version bumping for CI-CD
+Docker image for version bumping for your CI-CD
 
-Manage GIT and NPM (package.json) tags
+Increment & push GIT-tag and update package.json (or other configs in future versions)
 
 Based on Alpine image with `bash`, `git`, `openssh-client`, `jq` and `curl`. Uses the semver shell utility https://github.com/fsaintjacques/semver-tool/tree/master
 
@@ -10,8 +10,27 @@ Based on Alpine image with `bash`, `git`, `openssh-client`, `jq` and `curl`. Use
 tamtakoe/versme:latest
 ```
 
-### Examples
-GitLab configs https://github.com/tamtakoe/versme/tree/main/examples
+### Example
+```sh
+# Current GIT-tag: 1.2.3
+CI_COMMIT_BRANCH=master
+CI_PIPELINE_IID=456
+
+# 1. Increment patch version of git-tag and package.json
+# 2. Push git-tag (with ci.skip option) and package.json to the repo
+# 3. Returns 1.2.4
+DOCKER_TAG=$(versme release patch -b $CI_COMMIT_BRANCH -n $CI_PIPELINE_IID --type npm --push --skip-tag)
+```
+
+```sh
+# Current GIT-tag: 1.2.3
+CI_COMMIT_BRANCH=super-feature
+CI_PIPELINE_IID=456
+
+# 1. Returns 1.2.3-super-feature.456
+DOCKER_TAG=$(versme release patch -b $CI_COMMIT_BRANCH -n $CI_PIPELINE_IID --type npm --push --skip-tag)
+```
+More examples: https://github.com/tamtakoe/versme/tree/main/examples
 
 ### Usage
 ```sh
