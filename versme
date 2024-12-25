@@ -4,12 +4,13 @@ PACKAGE_JSON=${PACKAGE_JSON:-package.json}
 operation=$1
 
 PROG=versme
-PROG_VERSION="0.0.1"
+PROG_VERSION="0.0.2"
+PROG_PREFIX=\[versme\]
 
 USAGE="\
 Usage:
-  $PROG bump major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-p|--push] [-s|--skip] [-st|--skip-tag]
-  $PROG release major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-n|--number <build-number>] [-p|--push] [-s|--skip] [-st|--skip-tag] [-ss|--skip-snapshot]
+  $PROG bump major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-p|--push] [-s|--skip] [-st|--skip-tag] [-vb|--verbose]
+  $PROG release major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-n|--number <build-number>] [-p|--push] [-s|--skip] [-st|--skip-tag] [-ss|--skip-snapshot] [-vb|--verbose]
   $PROG get_app_version <application-type>
   $PROG set_app_version <application-type> <version>
   $PROG get_commit_tag_by_branch <branch>
@@ -26,6 +27,8 @@ Arguments:
   <branch>           Commit SHA
   <application-type> Type of application config. Only supported npm (package.json)
   <build-number>     Version suffix
+  <push>             Should push git-tag (and application-tag if the application-type is set) to repository
+  <skip>
   <version>          Semver version
   <repository-url>   Repository URL
 
@@ -34,7 +37,7 @@ Options:
   -h, --help         Print this help message.
 
 Commands:
-  bump        Bump by one of major, minor, patch version of branch. Default branch (main or master) if --branch not specify. 
+  bump        Bump by one of major, minor, patch version of branch.
               Add git-tag and push if --push option.
               Read and update application version if --type option. package.json for npm type
               Mark any push as skip-ci if --skip option or push tag only if --skip-tag option
@@ -44,11 +47,29 @@ Commands:
               If APP_VERSION < GIT_TAG_VERSION - Set app-version in git tag (push version-file)
               Return new version
 
+              Arguments:
+              --branch <branch>         - default branch. If not specified, the main (or master) branch will be used
+              --type <application-type> - application type. E.g. npm for application with package.json
+              --push                    - push new git-tag (and application-tag if application type is set) to the repository
+              --skip                    - add -o ci.skip to git push command to not notify CI-CD system of file changes
+              --skip-tag                - add -o ci.skip to git push command to not notify CI-CD system of tag changes
+              --verbose                 - show debug info
+
   release     Update version tag
-              E.g. 'release patch -b feature -n 123 -t npm -p -st -ss'
+              E.g. 'release patch -b feature -n 123 -t npm --push --skip-tag --skip-snapshot'
               If BRANCH = DEFAULT_BRANCH - Bump version. See bump arguments
               If BRANCH != DEFAULT_BRANCH and not --skip-snapshot - Make shapshot tag <current-version>-<branch-name>.<build-number>
               Return docker compatibility version tag
+
+              Arguments:
+              --branch <branch>         - default branch. If not specified, the main (or master) branch will be used
+              --type <application-type> - application type. E.g. npm for application with package.json
+              --number <build-number>   - use custom suffix for shapshot version. If not specified the part of commit SHA will be used
+              --push                    - push new git-tag (and application-tag if application type is set) to the repository
+              --skip                    - add -o ci.skip to git push command to not notify CI-CD system of file changes
+              --skip-tag                - add -o ci.skip to git push command to not notify CI-CD system of tag changes
+              --skip-snapshot           - don't create and push tags for snapdhot versions (if commit is not in the default branch)
+              --verbose                 - show debug info
 
   get_app_version             Get version tag from application config (e.g. for package.json if --type npm)
 
@@ -100,20 +121,42 @@ function release() {
       -b|--branch) BRANCH_NAME="$2"; shift;;
       -n|--number) BUILD_NUMBER="$2"; shift;;
       -ss|--skip-snapshot) SKIP_SNAPSHOT="true";;
+      -vb|--verbose) VERBOSE="true";;
     esac
     shift
   done
 
+  if [[ -n "$VERBOSE" ]]; then
+    if [[ "$BRANCH_NAME" == "$MASTER_NAME" ]]; then
+      BRANCH_TYPE="default"
+    else 
+      BRANCH_TYPE="snapshot"
+    fi
+    echo -e "$PROG_PREFIX Release $BUMP version:" >&2
+    echo -e "$PROG_PREFIX   BRANCH_NAME=$BRANCH_NAME ($BRANCH_TYPE), BUILD_NUMBER=$BUILD_NUMBER, SKIP-SNAPSHOT=$SKIP_SNAPSHOT" >&2
+  fi
+
   VERSION=$(latest)
+
   if [[ "$BRANCH_NAME" == "$MASTER_NAME" ]]; then
     if [[ -z $(get_commit_tag_by_commit $COMMIT_SHA) ]]; then # Commit does not have a tag
-      bump_version $ARGS # Bumped version
+      VERSION=$(bump_version $ARGS) # Bumped version
     else
-      echo "$VERSION" # Current version
+      if [[ -n "$VERBOSE" ]]; then
+        echo "$PROG_PREFIX Use latest git version: $VERSION (the commit already has the tag)" >&2
+      fi
     fi
   elif [[ -z "$SKIP_SNAPSHOT" ]]; then
-    echo "$VERSION-$BRANCH_NAME.$BUILD_NUMBER" # Snapshot version
+    VERSION="$VERSION-$BRANCH_NAME.$BUILD_NUMBER"
+    if [[ -n "$VERBOSE" ]]; then
+      echo "$PROG_PREFIX Use snapshot version: $VERSION" >&2
+    fi
+  else
+    if [[ -n "$VERBOSE" ]]; then
+      echo "$PROG_PREFIX Use latest git version: $VERSION (snapshot version was skipped)" >&2
+    fi
   fi
+  echo "$VERSION"
 }
 
 function bump_version() {
@@ -128,58 +171,100 @@ function bump_version() {
       -p|--push) GIT_MANAGER="git";;
       -s|--skip) SKIP="-o ci.skip ";;
       -st|--skip-tag) SKIP_TAG="-o ci.skip ";;
+      -vb|--verbose) VERBOSE="true";;
     esac
     shift
   done
 
   GIT_REPO_SSH_URL=$(git remote get-url origin)
-  GIT_VERSION=$(latest $GIT_REPO_SSH_URL) # Get latest git-tag of the branch
+  # GIT_VERSION=$(latest $GIT_REPO_SSH_URL) # Get latest git-tag of the branch. Alternative way
+  GIT_VERSION=$(latest) # Get latest git-tag of the branch
   VERSION="${GIT_VERSION:-0.0.0}"
-  APP_VERSION="$VERSION"
+
   if [[ -n "$PACKAGE_MANAGER" ]]; then
     APP_VERSION=$(get_app_version $PACKAGE_MANAGER)
   fi
-  # echo "BUMP $BUMP, VERSION $VERSION, GIT_VERSION $GIT_VERSION, APP_VERSION $APP_VERSION, GIT_MANAGER $GIT_MANAGER, PACKAGE_MANAGER $PACKAGE_MANAGER, SKIP $SKIP"
+
+  if [[ -n "$VERBOSE" ]]; then
+    echo -e "$PROG_PREFIX Bump $BUMP version:" >&2
+    echo -e "$PROG_PREFIX   GIT_VERSION=$GIT_VERSION, APP_VERSION=$APP_VERSION, GIT_MANAGER=$GIT_MANAGER, PACKAGE_MANAGER=$PACKAGE_MANAGER, SKIP=$SKIP, SKIP_TAG=$SKIP_TAG" >&2
+  fi
+
+  if [[ -z "$APP_VERSION" ]]; then
+    APP_VERSION="$VERSION"
+  fi
 
   if [[ "$VERSION" = "$APP_VERSION" ]] # Auto increment
   then 
     BUMPED_VERSION=$(semver.sh bump $BUMP $VERSION)
-    # echo "Increment version $VERSION -> $BUMPED_VERSION"
+    if [[ -n "$VERBOSE" ]]; then
+      echo "$PROG_PREFIX Increment version $VERSION -> $BUMPED_VERSION" >&2
+    fi
     VERSION="$BUMPED_VERSION"
     
     if [[ -n "$PACKAGE_MANAGER" ]]; then
       AFFECTED_FILES=$(set_app_version "$VERSION" "$PACKAGE_MANAGER")
+      if [[ -n "$VERBOSE" ]]; then
+        echo -e "$PROG_PREFIX Update $PACKAGE_MANAGER version:" >&2
+        echo -e "$PROG_PREFIX   git add '$AFFECTED_FILES'" >&2
+        echo -e "$PROG_PREFIX   git commit --allow-empty -q -m 'Release version $VERSION'" >&2
+      fi
       git add "$AFFECTED_FILES"
       git commit --allow-empty -q -m "Release version $VERSION"
     fi
   elif [[ $(semver.sh compare "$APP_VERSION" "$VERSION") = "1" ]] # APP_VERSION > GIT_VERSION
   then
-    # echo "Use version from package.json $APP_VERSION"
+    if [[ -n "$VERBOSE" ]]; then
+      echo "$PROG_PREFIX Use $PACKAGE_MANAGER version $VERSION -> $APP_VERSION" >&2
+    fi
     VERSION="$APP_VERSION"
   else
     # echo "Use version from GIT-tag $VERSION"
     if [[ -n "$PACKAGE_MANAGER" ]]; then
       AFFECTED_FILES=$(set_app_version "$VERSION" "$PACKAGE_MANAGER")
+      if [[ -n "$VERBOSE" ]]; then
+        echo -e "$PROG_PREFIX Update $PACKAGE_MANAGER version:" >&2
+        echo -e "$PROG_PREFIX   git add '$AFFECTED_FILES'" >&2
+        echo -e "$PROG_PREFIX   git commit --allow-empty -q -m 'Release version $VERSION'" >&2
+      fi
       git add "$AFFECTED_FILES"
       git commit --allow-empty -q -m "Release version $VERSION"
     fi
   fi
 
   if [[ -n "$GIT_MANAGER" ]]; then
-    if [[ -z $(git ls-remote --tags origin "$VERSION") ]]; then # if tag doesn't exist
+    GIT_TAG_REF=$(git ls-remote --tags origin "$VERSION")
+
+    if [[ -z $GIT_TAG_REF ]]; then # if tag doesn't exist
       git tag -f "$VERSION"
 
       if [[ $SKIP_TAG = $SKIP ]]; then # Use one push if possible
+        if [[ -n "$VERBOSE" ]]; then
+          echo -e "$PROG_PREFIX Push new tag $VERSION to $GIT_MANAGER repository:" >&2
+          echo -e "$PROG_PREFIX   git push -q --follow-tags $SKIP--no-verify origin $BRANCH_NAME $VERSION" >&2
+        fi
         bash -c "git push -q --follow-tags $SKIP--no-verify origin $BRANCH_NAME $VERSION" #2>/dev/null || true
       else
+        if [[ -n "$VERBOSE" ]]; then
+          echo -e "$PROG_PREFIX Push new tag $VERSION to $GIT_MANAGER repository:" >&2
+          echo -e "$PROG_PREFIX   git push -q $SKIP_TAG--no-verify origin $VERSION" >&2
+          echo -e "$PROG_PREFIX   git push -q $SKIP--no-verify origin $BRANCH_NAME" >&2
+        fi
         bash -c "git push -q $SKIP_TAG--no-verify origin $VERSION"
         bash -c "git push -q $SKIP--no-verify origin $BRANCH_NAME"
       fi
     else
+      if [[ -n "$VERBOSE" ]]; then
+        echo -e "$PROG_PREFIX Push existing tag $GIT_TAG_REF to $GIT_MANAGER repository:" >&2
+        echo -e "$PROG_PREFIX   git push -q $SKIP--no-verify origin $BRANCH_NAME" >&2
+      fi
       bash -c "git push -q $SKIP--no-verify origin $BRANCH_NAME"
     fi
   fi
 
+  if [[ -n "$VERBOSE" ]]; then
+    echo "$PROG_PREFIX Use bumped version: $VERSION" >&2
+  fi
   echo "$VERSION"
 }
 
@@ -269,4 +354,3 @@ elif [ "$operation" = "-h" ] || [ "$operation" = "--help" ]; then
 else
   echo "Non-existent operation. See $PROG --help"
 fi
-

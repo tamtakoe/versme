@@ -34,8 +34,8 @@ More examples: https://github.com/tamtakoe/versme/tree/main/examples
 
 ### Usage
 ```sh
-versme bump major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-p|--push] [-s|--skip] [-st|--skip-tag]
-versme release major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-n|--number <build-number>] [-p|--push] [-s|--skip] [-st|--skip-tag] [-ss|--skip-snapshot]
+versme bump major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-p|--push] [-s|--skip] [-st|--skip-tag] [-vb|--verbose]
+versme release major|minor|patch|prerel|release [-b|--branch <branch>] [-t|--type <application-type>] [-n|--number <build-number>] [-p|--push] [-s|--skip] [-st|--skip-tag] [-ss|--skip-snapshot] [-vb|--verbose]
 versme get_app_version <application-type>
 versme set_app_version <application-type> <version>
 versme get_commit_tag_by_branch <branch>
@@ -52,6 +52,8 @@ Arguments:
   <branch>           Commit SHA
   <application-type> Type of application config. Only supported npm (package.json)
   <build-number>     Version suffix
+  <push>             Should push git-tag (and application-tag if the application-type is set) to repository
+  <skip>
   <version>          Semver version
   <repository-url>   Repository URL
 
@@ -60,7 +62,7 @@ Options:
   -h, --help         Print this help message.
 
 Commands:
-  bump        Bump by one of major, minor, patch version of branch. Default branch (main or master) if --branch not specify. 
+  bump        Bump by one of major, minor, patch version of branch.
               Add git-tag and push if --push option.
               Read and update application version if --type option. package.json for npm type
               Mark any push as skip-ci if --skip option or push tag only if --skip-tag option
@@ -70,11 +72,29 @@ Commands:
               If APP_VERSION < GIT_TAG_VERSION - Set app-version in git tag (push version-file)
               Return new version
 
+              Arguments:
+              --branch <branch>         - default branch. If not specified, the main (or master) branch will be used
+              --type <application-type> - application type. E.g. npm for application with package.json
+              --push                    - push new git-tag (and application-tag if application type is set) to the repository
+              --skip                    - add -o ci.skip to git push command to not notify CI-CD system of file changes
+              --skip-tag                - add -o ci.skip to git push command to not notify CI-CD system of tag changes
+              --verbose                 - show debug info
+
   release     Update version tag
-              E.g. 'release patch -b feature -n 123 -t npm -p -st -ss'
+              E.g. 'release patch -b feature -n 123 -t npm --push --skip-tag --skip-snapshot'
               If BRANCH = DEFAULT_BRANCH - Bump version. See bump arguments
               If BRANCH != DEFAULT_BRANCH and not --skip-snapshot - Make shapshot tag <current-version>-<branch-name>.<build-number>
               Return docker compatibility version tag
+
+              Arguments:
+              --branch <branch>         - default branch. If not specified, the main (or master) branch will be used
+              --type <application-type> - application type. E.g. npm for application with package.json
+              --number <build-number>   - use custom suffix for shapshot version. If not specified the part of commit SHA will be used
+              --push                    - push new git-tag (and application-tag if application type is set) to the repository
+              --skip                    - add -o ci.skip to git push command to not notify CI-CD system of file changes
+              --skip-tag                - add -o ci.skip to git push command to not notify CI-CD system of tag changes
+              --skip-snapshot           - don't create and push tags for snapdhot versions (if commit is not in the default branch)
+              --verbose                 - show debug info
 
   get_app_version             Get version tag from application config (e.g. for package.json if --type npm)
 
