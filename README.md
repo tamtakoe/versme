@@ -93,7 +93,7 @@ Commands:
               --push                    - push new git-tag (and application-tag if application type is set) to the repository
               --skip                    - add -o ci.skip to git push command to not notify CI-CD system of file changes
               --skip-tag                - add -o ci.skip to git push command to not notify CI-CD system of tag changes
-              --skip-snapshot           - don't create and push tags for snapdhot versions (if commit is not in the default branch)
+              --skip-snapshot           - do not create and push tags for snapdhot versions (if commit is not in the default branch)
               --verbose                 - show debug info
 
   get_app_version             Get version tag from application config (e.g. for package.json if --type npm)
