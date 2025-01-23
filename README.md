@@ -3,7 +3,7 @@ Docker image for version bumping for your CI-CD
 
 Increment & push GIT-tag and update package.json (or other configs in future versions)
 
-Based on Alpine image with `bash`, `git`, `openssh-client`, `jq` and `curl`. Uses the semver shell utility https://github.com/fsaintjacques/semver-tool/tree/master
+Based on Alpine image with `bash`, `git`, `git-lfs`, `openssh-client`, `jq` and `curl`. Uses the semver shell utility https://github.com/fsaintjacques/semver-tool/tree/master
 
 ### Docker image
 ```sh
